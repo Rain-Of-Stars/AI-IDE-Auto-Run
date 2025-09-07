@@ -180,6 +180,7 @@ class RefactoredTrayApp(QtWidgets.QSystemTrayIcon):
             register_ui_handler('tooltip', self._handle_tooltip_update)
             register_ui_handler('status', self._handle_status_update)
             register_ui_handler('menu', self._handle_menu_update)
+            register_ui_handler('config', self._handle_config_update)
 
             # 连接响应性警告信号
             self.gui_manager.responsiveness_warning.connect(self._on_responsiveness_warning)
@@ -860,6 +861,22 @@ class RefactoredTrayApp(QtWidgets.QSystemTrayIcon):
             self.setToolTip(f"配置保存失败: {error_msg}")
             # 显示错误5秒后恢复
             QtCore.QTimer.singleShot(5000, lambda: self.setToolTip(f"AI-IDE-Auto-Run - {self._cached_status}"))
+    
+    def _handle_config_update(self, request):
+        """处理配置更新请求"""
+        try:
+            update_data = request.data
+            config = update_data.get('config')
+            
+            if config and self.worker and self.worker.isRunning():
+                # 更新扫描器配置
+                self.worker.update_config(config)
+                self.logger.info("扫描器配置已通过GUI管理器更新")
+            else:
+                self.logger.warning(f"配置更新失败: config={config}, worker={self.worker}, running={self.worker.isRunning() if self.worker else False}")
+                
+        except Exception as e:
+            self.logger.error(f"处理配置更新请求失败: {e}")
     
     def _handle_auto_hwnd_update(self, request):
         """处理自动HWND更新器的控制请求"""

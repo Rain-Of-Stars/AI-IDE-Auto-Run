@@ -16,6 +16,7 @@ from auto_approve.config_manager import AppConfig, ROI, save_config, load_config
 from auto_approve.path_utils import get_app_base_dir
 from auto_approve.app_state import get_app_state
 from auto_approve.ui_enhancements import enhance_widget, UIEnhancementManager
+from auto_approve.logger_manager import get_logger
 
 
 class CustomCheckBox(QtWidgets.QCheckBox):
@@ -570,6 +571,8 @@ class SettingsDialog(QtWidgets.QDialog):
     saved = QtCore.Signal(object)
     def __init__(self, parent=None):
         super().__init__(parent)
+        # 初始化logger
+        self._logger = get_logger()
         # 窗口参数
         self.setWindowTitle("AI-IDE-Auto-Run - 设置")
         self.setModal(True)
@@ -1644,7 +1647,21 @@ class SettingsDialog(QtWidgets.QDialog):
             if self.list_templates.item(i).text().strip() == rel_path:
                 self.list_templates.setCurrentRow(i)
                 break
-        QtWidgets.QMessageBox.information(self, "成功", f"模板图片已创建：\n{rel_path}")
+        
+        # 5) 立即将新模板加载到内存模板管理器中，避免需要重启软件
+        try:
+            from utils.memory_template_manager import get_template_manager
+            template_manager = get_template_manager()
+            # 强制重新加载新保存的模板
+            loaded_count = template_manager.load_templates([abs_path], force_reload=True)
+            if loaded_count > 0:
+                self._logger.info(f"新模板已立即加载到内存缓存: {rel_path}")
+            else:
+                self._logger.warning(f"新模板加载到内存缓存失败: {rel_path}")
+        except Exception as e:
+            self._logger.error(f"加载新模板到内存缓存时发生异常: {e}")
+        
+        QtWidgets.QMessageBox.information(self, "成功", f"模板图片已创建并加载到内存：\n{rel_path}")
 
     def _get_template_paths(self) -> List[str]:
         """读取列表中的所有模板路径。"""
