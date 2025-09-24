@@ -232,7 +232,6 @@ D:/conda_env/envs/use/python.exe -m unittest discover -s tests -v
 ```
 
 - 典型冒烟：`tests/test_env_smoke.py` 验证依赖与核心模块可导入；其余测试覆盖 DPI、WGC、性能与 UI 响应性等。
-
 - 单文件防卡运行（推荐）：使用带超时的运行器避免个别测试阻塞。
 
 ```bat
@@ -241,6 +240,7 @@ python tools/run_tests_timeout.py -p "tests/test_*ui*.py" -t 15
 ```
 
 说明：
+
 - 默认开启 `TEST_MODE=1` 并加载仓库根 `sitecustomize.py`，自动裁剪 `QTimer` 延时与 `sleep`，进一步降低卡住风险；
 - 任何失败或超时将以非0退出码返回，并打印精简摘要与 3–5 条修复建议；
 - 需要更激进的裁剪，可通过环境变量调整：`AIIDE_TEST_MAX_DELAY_MS`、`AIIDE_TEST_MAX_INTERVAL_MS`、`AIIDE_TEST_MAX_SLEEP_S`。
@@ -263,7 +263,7 @@ python tools/run_tests_timeout.py -p "tests/test_*ui*.py" -t 15
 
 ## 更新日志
 
-### V5.1（当前）
+### V5.2.8（当前）
 
 - 托盘应用全面重构：响应更快、状态更清晰（开始/停止/后端/详情）。
 - 引入 GUI 响应性管理与性能监控：卡顿自动告警与应急恢复。
