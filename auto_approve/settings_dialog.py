@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import shutil
 import hashlib
+from contextlib import contextmanager
 from typing import Tuple, List
 
 from capture.monitor_utils import get_all_monitors_info
@@ -1608,6 +1609,55 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         ImagePreviewDialog(pm, path, self).exec()
 
+    @contextmanager
+    def _temporarily_minimize_windows(self):
+        """在截图期间临时最小化当前应用的所有顶层窗口。"""
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            yield
+            return
+
+        to_restore: List[Tuple[QtWidgets.QWidget, QtCore.Qt.WindowState]] = []
+        for widget in app.topLevelWidgets():
+            try:
+                if not widget.isVisible() or not widget.isWindow():
+                    continue
+                state = widget.windowState()
+                if state & QtCore.Qt.WindowMinimized:
+                    continue
+                to_restore.append((widget, state))
+            except Exception:
+                continue
+
+        try:
+            for widget, _ in to_restore:
+                try:
+                    widget.showMinimized()
+                except Exception:
+                    pass
+            try:
+                QtWidgets.QApplication.processEvents()
+            except Exception:
+                pass
+            yield
+        finally:
+            for widget, state in to_restore:
+                try:
+                    widget.setWindowState(state)
+                    widget.show()
+                except Exception:
+                    pass
+            try:
+                QtWidgets.QApplication.processEvents()
+            except Exception:
+                pass
+            try:
+                self.showNormal()
+                self.raise_()
+                self.activateWindow()
+            except Exception:
+                pass
+
     def _on_screenshot_add_template(self):
         """截图并在预览窗口中让用户决定是否保存为模板。
 
@@ -1616,72 +1666,73 @@ class SettingsDialog(QtWidgets.QDialog):
         - 截图完成后弹出“截图预览”对话框，提供“保存/取消”。
         - 用户点击保存时，统一保存为PNG到项目的 assets/images，并加入模板列表。
         """
-        screens = QtGui.QGuiApplication.screens()
-        if not screens:
-            QtWidgets.QMessageBox.warning(self, "截图失败", "未检测到屏幕")
-            return
+        with self._temporarily_minimize_windows():
+            screens = QtGui.QGuiApplication.screens()
+            if not screens:
+                QtWidgets.QMessageBox.warning(self, "截图失败", "未检测到屏幕")
+                return
 
-        # 1) 优先根据鼠标位置选择屏幕；若不可用，回退到索引选择
-        cursor_pos = QtGui.QCursor.pos()
-        screen = QtGui.QGuiApplication.screenAt(cursor_pos)
-        if screen is None:
-            # 从“显示器索引”(1-based)选择屏幕（与旧行为兼容）
-            idx = max(1, min(self.sb_monitor.value(), len(screens))) - 1
-            screen = screens[idx]
+            # 1) 优先根据鼠标位置选择屏幕；若不可用，回退到索引选择
+            cursor_pos = QtGui.QCursor.pos()
+            screen = QtGui.QGuiApplication.screenAt(cursor_pos)
+            if screen is None:
+                # 从“显示器索引”(1-based)选择屏幕（与旧行为兼容）
+                idx = max(1, min(self.sb_monitor.value(), len(screens))) - 1
+                screen = screens[idx]
 
-        # 2) 截取目标屏幕全屏背景，启动区域取框
-        bg = screen.grabWindow(0)
-        snip = RegionSnipDialog(screen, bg, self)
-        if snip.exec() != QtWidgets.QDialog.Accepted or not snip.selected_pixmap or snip.selected_pixmap.isNull():
-            return
+            # 2) 截取目标屏幕全屏背景，启动区域取框
+            bg = screen.grabWindow(0)
+            snip = RegionSnipDialog(screen, bg, self)
+            if snip.exec() != QtWidgets.QDialog.Accepted or not snip.selected_pixmap or snip.selected_pixmap.isNull():
+                return
 
-        # 3) 弹出确认预览，用户决定是否保存
-        confirm = ScreenshotPreviewDialog(snip.selected_pixmap, self)
-        if confirm.exec() != QtWidgets.QDialog.Accepted:
-            # 用户取消，不保存
-            return
+            # 3) 弹出确认预览，用户决定是否保存
+            confirm = ScreenshotPreviewDialog(snip.selected_pixmap, self)
+            if confirm.exec() != QtWidgets.QDialog.Accepted:
+                # 用户取消，不保存
+                return
 
-        # 4) 保存PNG到 assets/images 下，并加入列表
-        images_abs, images_rel = self._ensure_assets_images_dir()
-        fname = f"template_{QtCore.QDateTime.currentDateTime().toString('yyyyMMdd_HHmmss_zzz')}.png"
-        abs_path = os.path.join(images_abs, fname)
-        snip.selected_pixmap.save(abs_path, "PNG")
-        rel_path = os.path.join(images_rel, fname)
-        # 去重添加并选中新增项
-        existing = {self.list_templates.item(i).text().strip() for i in range(self.list_templates.count())}
-        if rel_path not in existing:
-            self.list_templates.addItem(rel_path)
-        # 将焦点移动到新增项，便于用户确认
-        for i in range(self.list_templates.count()-1, -1, -1):
-            if self.list_templates.item(i).text().strip() == rel_path:
-                self.list_templates.setCurrentRow(i)
-                break
-        
-        # 5) 立即将新模板加载到内存模板管理器中，避免需要重启软件
-        try:
-            from utils.memory_template_manager import get_template_manager
-            template_manager = get_template_manager()
-            # 强制重新加载新保存的模板
-            loaded_count = template_manager.load_templates([abs_path], force_reload=True)
-            if loaded_count > 0:
-                self._logger.info(f"新模板已立即加载到内存缓存: {rel_path}")
-            else:
-                self._logger.warning(f"新模板加载到内存缓存失败: {rel_path}")
-        except Exception as e:
-            self._logger.error(f"加载新模板到内存缓存时发生异常: {e}")
-        
-        QtWidgets.QMessageBox.information(self, "成功", f"模板图片已创建并加载到内存：\n{rel_path}")
+            # 4) 保存PNG到 assets/images 下，并加入列表
+            images_abs, images_rel = self._ensure_assets_images_dir()
+            fname = f"template_{QtCore.QDateTime.currentDateTime().toString('yyyyMMdd_HHmmss_zzz')}.png"
+            abs_path = os.path.join(images_abs, fname)
+            snip.selected_pixmap.save(abs_path, "PNG")
+            rel_path = os.path.join(images_rel, fname)
+            # 去重添加并选中新增项
+            existing = {self.list_templates.item(i).text().strip() for i in range(self.list_templates.count())}
+            if rel_path not in existing:
+                self.list_templates.addItem(rel_path)
+            # 将焦点移动到新增项，便于用户确认
+            for i in range(self.list_templates.count()-1, -1, -1):
+                if self.list_templates.item(i).text().strip() == rel_path:
+                    self.list_templates.setCurrentRow(i)
+                    break
+            
+            # 5) 立即将新模板加载到内存模板管理器中，避免需要重启软件
+            try:
+                from utils.memory_template_manager import get_template_manager
+                template_manager = get_template_manager()
+                # 强制重新加载新保存的模板
+                loaded_count = template_manager.load_templates([abs_path], force_reload=True)
+                if loaded_count > 0:
+                    self._logger.info(f"新模板已立即加载到内存缓存: {rel_path}")
+                else:
+                    self._logger.warning(f"新模板加载到内存缓存失败: {rel_path}")
+            except Exception as e:
+                self._logger.error(f"加载新模板到内存缓存时发生异常: {e}")
+            
+            QtWidgets.QMessageBox.information(self, "成功", f"模板图片已创建并加载到内存：\n{rel_path}")
 
-        # 6) 立即保存配置并广播，让扫描器进程/线程立刻应用新模板
-        # 说明：
-        # - _on_save 会构造 AppConfig（含最新的模板列表）、发出 saved 信号，并进行异步持久化；
-        # - 主程序监听 saved 信号后，会通过 GUI 响应管理器下发“配置更新”，触发扫描器重载模板；
-        # - 这样可实现“截图→保存”后立即生效与点击新增模板的需求。
-        try:
-            self._on_save()
-        except Exception as e:
-            # 保存失败不影响已添加的模板条目，提醒用户可手动点击“保存”按钮
-            self._logger.warning(f"截图后自动保存配置失败: {e}")
+            # 6) 立即保存配置并广播，让扫描器进程/线程立刻应用新模板
+            # 说明：
+            # - _on_save 会构造 AppConfig（含最新的模板列表）、发出 saved 信号，并进行异步持久化；
+            # - 主程序监听 saved 信号后，会通过 GUI 响应管理器下发“配置更新”，触发扫描器重载模板；
+            # - 这样可实现“截图→保存”后立即生效与点击新增模板的需求。
+            try:
+                self._on_save()
+            except Exception as e:
+                # 保存失败不影响已添加的模板条目，提醒用户可手动点击“保存”按钮
+                self._logger.warning(f"截图后自动保存配置失败: {e}")
 
     def _get_template_paths(self) -> List[str]:
         """读取列表中的所有模板路径。"""
