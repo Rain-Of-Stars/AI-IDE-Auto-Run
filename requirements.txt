@@ -1,0 +1,26 @@
+# AI_IDE_Auto_Run 项目依赖包（精准版本）
+# 版本与 D:/conda_env/envs/use 当前已安装环境保持一致
+
+# 核心GUI框架
+PySide6==6.9.2
+
+# 图像处理和计算机视觉
+numpy==1.26.4
+opencv-python==4.8.1
+Pillow==11.3.0
+
+# 系统监控和性能
+psutil==5.9.8
+
+# 网络与异步
+requests==2.32.5
+aiohttp==3.12.15
+websockets==12.0
+qasync==0.28.0  # Qt异步支持
+
+# Windows系统集成（WGC）
+windows-capture==1.5.0
+
+# 开发和测试工具（可选，项目使用 unittest）
+# pytest>=7.0.0
+# pytest-qt>=4.0.0

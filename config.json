@@ -1,0 +1,77 @@
+{
+  "template_path": "template.png",
+  "template_paths": [
+    "template.png",
+    "assets\\images\\template_20250924_203028_306.png"
+  ],
+  "monitor_index": 1,
+  "roi": {
+    "x": 0,
+    "y": 0,
+    "w": 0,
+    "h": 0
+  },
+  "interval_ms": 800,
+  "threshold": 0.88,
+  "cooldown_s": 5.0,
+  "enable_logging": false,
+  "enable_notifications": true,
+  "grayscale": true,
+  "multi_scale": false,
+  "scales": [
+    1.0,
+    1.25,
+    0.8
+  ],
+  "click_offset": [
+    0.0,
+    0.0
+  ],
+  "min_detections": 1,
+  "auto_start_scan": true,
+  "debug_mode": false,
+  "save_debug_images": false,
+  "debug_image_dir": "debug_images",
+  "enable_coordinate_correction": true,
+  "coordinate_offset": [
+    0,
+    0
+  ],
+  "enhanced_window_finding": true,
+  "click_method": "message",
+  "verify_window_before_click": true,
+  "coordinate_transform_mode": "auto",
+  "enable_multi_screen_polling": false,
+  "screen_polling_interval_ms": 1000,
+  "capture_backend": "window",
+  "use_monitor": false,
+  "target_hwnd": 1447524,
+  "target_process": "Windsurf.exe",
+  "process_partial_match": true,
+  "fps_max": 30,
+  "capture_timeout_ms": 5000,
+  "restore_minimized_noactivate": true,
+  "restore_minimized_after_capture": false,
+  "enable_electron_optimization": true,
+  "include_cursor": false,
+  "border_required": true,
+  "window_border_required": true,
+  "screen_border_required": false,
+  "dirty_region_mode": "",
+  "auto_update_hwnd_by_process": false,
+  "auto_update_hwnd_interval_ms": 5000,
+  "enable_smart_finder": true,
+  "smart_finder_base_interval": 1.0,
+  "smart_finder_max_interval": 30.0,
+  "smart_finder_min_interval": 0.5,
+  "enable_auto_recovery": true,
+  "max_recovery_attempts": 5,
+  "recovery_cooldown": 10.0,
+  "finder_strategies": {
+    "process_name": true,
+    "process_path": true,
+    "window_title": true,
+    "class_name": true,
+    "fuzzy_match": true
+  }
+}
