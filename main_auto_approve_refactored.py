@@ -966,31 +966,11 @@ class RefactoredTrayApp(QtWidgets.QSystemTrayIcon):
             else:
                 self.logger.info(f"自动更新目标窗口HWND：{hwnd} (进程: {process_name})")
             
-            # 保存配置到文件
+            # 保存配置到SQLite（并导出JSON镜像）
             try:
-                # 使用同步保存确保配置立即更新
-                import json
-                from dataclasses import asdict
-                from auto_approve.config_manager import CONFIG_FILE
-                
-                config_data = asdict(self.cfg)
-                config_data["roi"] = asdict(self.cfg.roi)
-                config_data["scales"] = list(self.cfg.scales)
-                config_data["click_offset"] = list(self.cfg.click_offset)
-                config_data["coordinate_offset"] = list(self.cfg.coordinate_offset)
-                
-                # 兼容处理
-                if isinstance(config_data.get("template_paths"), list):
-                    if config_data["template_paths"]:
-                        config_data["template_path"] = config_data["template_paths"][0]
-                
-                config_path = os.path.abspath(CONFIG_FILE)
-                os.makedirs(os.path.dirname(config_path), exist_ok=True)
-                
-                with open(config_path, 'w', encoding='utf-8') as f:
-                    json.dump(config_data, f, indent=2, ensure_ascii=False)
-                
-                self.logger.info(f"配置已同步保存到文件，target_hwnd更新为: {hwnd}")
+                from auto_approve.config_manager import save_config
+                save_config(self.cfg)
+                self.logger.info(f"配置已保存（SQLite）并同步镜像，target_hwnd更新为: {hwnd}")
             except Exception as save_e:
                 self.logger.warning(f"保存配置失败: {save_e}")
             

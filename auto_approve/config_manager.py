@@ -168,18 +168,18 @@ def _default_config_dict() -> Dict[str, Any]:
 
 
 def ensure_config_exists(path: Optional[str] = None) -> str:
-    """确保SQLite中存在配置；若无则迁移或初始化默认配置。返回建议的镜像路径（不再使用）。"""
+    """确保SQLite中存在配置；若无则初始化默认配置。
+
+    说明：不再读取、生成或迁移任何JSON文件；仅使用SQLite。
+    返回值仅为兼容旧签名，不应再被上层使用。
+    """
     config_path = os.path.abspath(path or CONFIG_FILE)
-    # 将数据库文件固定到镜像JSON的同一目录，避免工作目录变化导致位置不一致
+    # 将数据库文件固定到期望目录，避免工作目录变化导致位置不一致
     db_path = get_db_path(os.path.dirname(config_path))
     init_db(db_path)
 
-    data = get_config_json()
-    if data is None:
-        # 优先从历史JSON迁移一次；否则写入默认配置
-        imported = import_config_from_json(config_path)
-        if imported is None:
-            set_config_json(_default_config_dict())
+    if get_config_json() is None:
+        set_config_json(_default_config_dict())
     return config_path
 
 

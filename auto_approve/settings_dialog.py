@@ -1726,16 +1726,16 @@ class SettingsDialog(QtWidgets.QDialog):
             try:
                 from utils.memory_template_manager import get_template_manager
                 template_manager = get_template_manager()
-                # 强制重新加载新保存的模板
-                loaded_count = template_manager.load_templates([abs_path], force_reload=True)
+                # 强制重新加载新保存的模板（db:// 引用）
+                loaded_count = template_manager.load_templates([ref], force_reload=True)
                 if loaded_count > 0:
-                    self._logger.info(f"新模板已立即加载到内存缓存: {rel_path}")
+                    self._logger.info(f"新模板已立即加载到内存缓存: {ref}")
                 else:
-                    self._logger.warning(f"新模板加载到内存缓存失败: {rel_path}")
+                    self._logger.warning(f"新模板加载到内存缓存失败: {ref}")
             except Exception as e:
                 self._logger.error(f"加载新模板到内存缓存时发生异常: {e}")
             
-            QtWidgets.QMessageBox.information(self, "成功", f"模板图片已创建并加载到内存：\n{rel_path}")
+            QtWidgets.QMessageBox.information(self, "成功", f"模板图片已创建并加载到内存：\n{ref}")
 
             # 6) 立即保存配置并广播，让扫描器进程/线程立刻应用新模板
             # 说明：

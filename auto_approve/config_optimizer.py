@@ -285,12 +285,11 @@ class ConfigOptimizer:
         """保存优化配置"""
         try:
             if backup_original:
-                # 备份原配置
-                timestamp = int(time.time())
-                backup_path = f"config_backup_{timestamp}.json"
-                current_config = load_config()
-                save_config(current_config, backup_path)
-                self._logger.info(f"原配置已备份到: {backup_path}")
+                # 备份原配置（写入SQLite备份表）
+                from storage import add_config_backup, get_config_json
+                current = get_config_json() or {}
+                backup_id = add_config_backup(current, note="auto-backup before optimization")
+                self._logger.info(f"原配置已备份到SQLite（backup_id={backup_id}）")
             
             # 保存新配置
             save_config(config)
