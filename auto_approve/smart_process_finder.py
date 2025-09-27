@@ -138,6 +138,14 @@ class SmartProcessFinder(QtCore.QObject):
         self._search_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
+
+        # WinEventHook 相关：用于即时捕获HWND变化
+        self._win_event_thread: Optional[threading.Thread] = None
+        self._win_event_stop = threading.Event()
+        self._win_event_ready = threading.Event()
+        self._hook_handles: List[int] = []
+        self._hook_cbs: List[Callable] = []
+        self._event_hook_enabled: bool = True  # 默认启用事件钩子
         
         # 统计信息
         self._stats = {
@@ -154,6 +162,13 @@ class SmartProcessFinder(QtCore.QObject):
             self._config = config
             self._update_parameters_from_config()
             self._update_target_from_config()
+            # 若配置切换目标，重启事件钩子
+            if self._event_hook_enabled and self._search_thread and self._search_thread.is_alive():
+                try:
+                    self._restart_event_hooks()
+                except Exception:
+                    # 不因事件钩子失败影响主流程
+                    pass
             
     def _update_parameters_from_config(self):
         """从配置更新参数"""
@@ -204,6 +219,9 @@ class SmartProcessFinder(QtCore.QObject):
             self._search_thread = threading.Thread(target=self._smart_search_loop, daemon=True)
             self._search_thread.start()
             self.logger.info("智能进程查找已启动")
+            # 启动WinEventHook线程以即时捕获窗口变化
+            if self._event_hook_enabled:
+                self._start_event_hooks_async()
             
     def stop_smart_search(self):
         """停止智能查找"""
@@ -212,6 +230,8 @@ class SmartProcessFinder(QtCore.QObject):
             if self._search_thread and self._search_thread.is_alive():
                 self._search_thread.join(timeout=2.0)
             self.logger.info("智能进程查找已停止")
+            # 停止事件钩子线程
+            self._stop_event_hooks()
             
     def _smart_search_loop(self):
         """智能查找主循环"""
@@ -219,13 +239,237 @@ class SmartProcessFinder(QtCore.QObject):
             try:
                 if self._should_search():
                     self._perform_smart_search()
-                    
+                
                 # 自适应间隔
                 time.sleep(self._adaptive_interval)
                 
             except Exception as e:
                 self.logger.error(f"智能查找循环异常: {e}")
                 time.sleep(self._base_interval)
+
+    # ===================== WinEventHook: 即时窗口变化捕获 =====================
+    def _start_event_hooks_async(self):
+        """在独立线程启动WinEventHook，避免阻塞主线程。
+        说明：使用 WINEVENT_OUTOFCONTEXT+WINEVENT_SKIPOWNPROCESS，无需消息循环，
+        但线程需常驻以持有回调与hook句柄，防止被GC导致钩子失效。
+        """
+        if self._win_event_thread and self._win_event_thread.is_alive():
+            return
+        self._win_event_stop.clear()
+        self._win_event_ready.clear()
+        self._win_event_thread = threading.Thread(target=self._event_hook_thread_main, daemon=True)
+        self._win_event_thread.start()
+        # 最多等待1秒确认钩子安装成功/失败
+        self._win_event_ready.wait(timeout=1.0)
+
+    def _stop_event_hooks(self):
+        """停止WinEventHook线程并卸载钩子"""
+        try:
+            self._win_event_stop.set()
+            # 卸载所有钩子
+            try:
+                user32 = ctypes.WinDLL('user32', use_last_error=True)
+                for h in self._hook_handles:
+                    try:
+                        user32.UnhookWinEvent(h)
+                    except Exception:
+                        pass
+            finally:
+                self._hook_handles.clear()
+                self._hook_cbs.clear()
+            # 等待线程退出
+            if self._win_event_thread and self._win_event_thread.is_alive():
+                self._win_event_thread.join(timeout=2.0)
+        except Exception:
+            pass
+
+    def _restart_event_hooks(self):
+        """重启事件钩子（用于目标或配置变化）"""
+        self._stop_event_hooks()
+        self._start_event_hooks_async()
+
+    def _event_hook_thread_main(self):
+        """事件钩子线程主函数：安装钩子并保持线程常驻"""
+        try:
+            # 若无目标，直接返回并标记ready，避免阻塞
+            target = None
+            with self._lock:
+                target = self._current_target
+            if not target:
+                self._win_event_ready.set()
+                # 等待直到被停止
+                while not self._win_event_stop.is_set():
+                    time.sleep(0.2)
+                return
+
+            user32 = ctypes.WinDLL('user32', use_last_error=True)
+
+            # 常量定义（仅此处使用，避免全局污染）
+            EVENT_SYSTEM_FOREGROUND = 0x0003
+            EVENT_OBJECT_CREATE = 0x8000
+            EVENT_OBJECT_DESTROY = 0x8001
+            EVENT_OBJECT_SHOW = 0x8002
+            EVENT_OBJECT_NAMECHANGE = 0x800C
+            WINEVENT_OUTOFCONTEXT = 0x0000
+            WINEVENT_SKIPOWNPROCESS = 0x0002
+
+            WinEventProcType = ctypes.WINFUNCTYPE(
+                None,
+                wintypes.HANDLE,  # HWINEVENTHOOK
+                wintypes.DWORD,   # event
+                wintypes.HWND,    # hwnd
+                wintypes.LONG,    # idObject
+                wintypes.LONG,    # idChild
+                wintypes.DWORD,   # idEventThread
+                wintypes.DWORD    # dwmsEventTime
+            )
+
+            def _install(event_min: int, event_max: int, cb):
+                # 先创建回调包装对象，既用于传入API，也要保存引用防GC
+                cb_wrap = WinEventProcType(cb)
+                handle = user32.SetWinEventHook(
+                    event_min, event_max,
+                    None,
+                    cb_wrap,
+                    0, 0,
+                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+                )
+                if handle:
+                    self._hook_handles.append(handle)
+                    self._hook_cbs.append(cb_wrap)
+                return handle
+
+            # 事件回调：将候选窗口提交给评估函数
+            def _event_cb_factory(tag: str):
+                def _cb(hWinEventHook, event, hwnd, idObject, idChild, idEventThread, dwmsEventTime):
+                    try:
+                        # 仅处理窗口对象且是顶层窗口
+                        if idObject != 0 or idChild != 0:
+                            return
+                        if not hwnd:
+                            return
+                        # 提交候选，由内部进行目标与可见性判断
+                        self._on_window_event_candidate(int(hwnd), int(event), source=tag)
+                    except Exception:
+                        pass
+                return _cb
+
+            # 安装我们关心的几个事件范围
+            ok1 = _install(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, _event_cb_factory('FOREGROUND'))
+            ok2 = _install(EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, _event_cb_factory('CREATE_SHOW'))
+            ok3 = _install(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE, _event_cb_factory('NAMECHANGE'))
+
+            if not (ok1 or ok2 or ok3):
+                # 安装失败则直接返回，后续回退到轮询
+                self._win_event_ready.set()
+                return
+
+            self._win_event_ready.set()
+            # 线程常驻：不需要消息泵，保持存活以持有hook与回调
+            while not self._win_event_stop.is_set():
+                time.sleep(0.2)
+        except Exception as e:
+            # 任何异常不影响主流程
+            try:
+                self.logger.debug(f"WinEventHook线程异常: {e}")
+            except Exception:
+                pass
+        finally:
+            # 退出前尝试卸载
+            try:
+                user32 = ctypes.WinDLL('user32', use_last_error=True)
+                for h in self._hook_handles:
+                    try:
+                        user32.UnhookWinEvent(h)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            self._hook_handles.clear()
+            self._hook_cbs.clear()
+
+    def _on_window_event_candidate(self, hwnd: int, event_id: int, source: str = ""):
+        """处理来自WinEventHook的候选窗口。
+        - 验证是否属于目标进程
+        - 评估是否更适合作为新的主HWND（前台窗口优先，面积更大优先）
+        """
+        try:
+            with self._lock:
+                target = self._current_target
+                current = self._current_hwnd
+            if not target or not hwnd:
+                return
+
+            # 仅当窗口属于目标进程时继续
+            info = self._get_window_info(hwnd)
+            if not info or not info.get('process'):
+                return
+            target_lower = target.lower()
+            proc_lower = info['process'].lower()
+            path_lower = info.get('path', '').lower()
+            if (target_lower not in proc_lower) and (target_lower not in path_lower):
+                return
+
+            # 窗口有效且可见
+            if not self._is_window_valid(hwnd):
+                return
+
+            # 如果当前为空，直接采用
+            if not current:
+                self._adopt_new_hwnd(hwnd, reason=f"event:{source}")
+                return
+
+            if hwnd == current:
+                return
+
+            # 评估：若是前台事件，直接切换；否则按面积与可见性决定
+            EVENT_SYSTEM_FOREGROUND = 0x0003
+            if event_id == EVENT_SYSTEM_FOREGROUND:
+                self._adopt_new_hwnd(hwnd, reason=f"foreground:{source}")
+                return
+
+            # 非前台：比较面积，优先取更大可见窗口，避免工具/对话框占用
+            try:
+                from capture.monitor_utils import get_window_rect
+                rect_new = get_window_rect(hwnd) or {}
+                rect_cur = get_window_rect(current) or {}
+                area_new = max(0, int(rect_new.get('width', 0))) * max(0, int(rect_new.get('height', 0)))
+                area_cur = max(0, int(rect_cur.get('width', 0))) * max(0, int(rect_cur.get('height', 0)))
+            except Exception:
+                area_new = 0
+                area_cur = 0
+
+            if area_new > 0 and area_new >= max(area_cur, 160*120):
+                self._adopt_new_hwnd(hwnd, reason=f"area:{source}")
+        except Exception:
+            # 静默忽略，避免影响主流程
+            pass
+
+    def _adopt_new_hwnd(self, hwnd: int, reason: str = ""):
+        """采用新的主HWND并发出相应信号。"""
+        try:
+            start_time = time.time()
+            with self._lock:
+                self._current_hwnd = hwnd
+                self._find_count += 1
+                self._success_count += 1
+                self._stats['total_searches'] += 1
+                self._stats['successful_searches'] += 1
+                self._stats['last_search_time'] = 0.0
+                # 成功后适当延长间隔，避免抖动
+                self._update_adaptive_interval(True)
+
+            window_info = self._get_window_info(hwnd)
+            if window_info:
+                self.process_found.emit(hwnd, window_info['process'], window_info['title'])
+                self._progress_manager.update_progress("process_finder", 100)
+                self._progress_manager.update_status("process_finder", f"切换窗口({reason}) -> {window_info['process']}")
+                try:
+                    self.logger.info(f"事件驱动切换HWND: {hwnd}，原因={reason}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
                 
     def _should_search(self) -> bool:
         """判断是否应该执行查找"""
@@ -243,6 +487,23 @@ class SmartProcessFinder(QtCore.QObject):
                 self.process_lost.emit(self._current_hwnd, self._current_target)
                 self._current_hwnd = 0
                 return True
+            else:
+                # 新增：即使当前句柄仍有效，也周期性核对是否出现了更合适的顶层窗口（例如主窗口重建）
+                # 频率受自适应间隔控制，避免过度消耗
+                try:
+                    candidate = self._search_by_process_name()
+                    if candidate and candidate != self._current_hwnd:
+                        # 仅当候选明显更优（如面积更大）时才切换，降低误切
+                        from capture.monitor_utils import get_window_rect
+                        rect_new = get_window_rect(candidate) or {}
+                        rect_cur = get_window_rect(self._current_hwnd) or {}
+                        area_new = max(0, int(rect_new.get('width', 0))) * max(0, int(rect_new.get('height', 0)))
+                        area_cur = max(0, int(rect_cur.get('width', 0))) * max(0, int(rect_cur.get('height', 0)))
+                        if area_new > max(area_cur, 200*150):
+                            self._adopt_new_hwnd(candidate, reason="periodic-better")
+                            return False
+                except Exception:
+                    pass
         else:
             # 首次启动或当前无窗口，执行查找
             return True
