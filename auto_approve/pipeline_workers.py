@@ -248,15 +248,18 @@ class VisionWorker(QtCore.QObject):
                 self.sig_log.emit("模板路径为空")
                 return
 
-            # 解析相对路径为绝对路径：
-            # 1) 绝对路径直接使用；
-            # 2) 基于应用目录拼接；
-            # 3) 在应用目录 assets/images 下按文件名兜底；
-            # 4) 工作目录兜底。
+            # 解析路径：
+            # - 若为 db:// 引用，直接返回；
+            # - 若为文件路径：
+            #   1) 绝对路径直接使用；
+            #   2) 基于应用目录拼接；
+            #   3) 工作目录兜底。
             def _resolve(p: str) -> str:
                 try:
                     if not p:
                         return ""
+                    if isinstance(p, str) and p.startswith('db://'):
+                        return p
                     import os
                     p = os.path.normpath(p)
                     if os.path.isabs(p) and os.path.exists(p):
@@ -265,10 +268,6 @@ class VisionWorker(QtCore.QObject):
                     cand = os.path.join(base_dir, p)
                     if os.path.exists(cand):
                         return cand
-                    img_dir = os.path.join(base_dir, "assets", "images")
-                    cand2 = os.path.join(img_dir, os.path.basename(p))
-                    if os.path.exists(cand2):
-                        return cand2
                     wd_path = os.path.abspath(os.path.join(os.getcwd(), p))
                     if os.path.exists(wd_path):
                         return wd_path

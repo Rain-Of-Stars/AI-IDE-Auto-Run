@@ -1522,15 +1522,10 @@ class SettingsDialog(QtWidgets.QDialog):
         return ""
     
     def _ensure_assets_images_dir(self) -> Tuple[str, str]:
-        """确保 assets/images 目录存在，返回(绝对路径, 相对路径)。
-        
-        变更：基于应用基准目录（exe或主脚本目录）创建与保存，
-        避免打包运行时落到临时解包目录。
-        """
+        """兼容旧接口：返回 assets/images 路径对，但不再创建目录（SQLite模式不使用）。"""
         proj_root = get_app_base_dir()
         images_abs = os.path.join(proj_root, "assets", "images")
         images_rel = os.path.join("assets", "images")
-        os.makedirs(images_abs, exist_ok=True)
         return images_abs, images_rel
 
     def _resolve_template_path(self, p: str) -> str:

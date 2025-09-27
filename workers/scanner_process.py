@@ -121,15 +121,7 @@ def _compute_window_open_plan(cfg: AppConfig) -> list:
 
 
 def _resolve_template_path(p: str) -> str:
-    """解析模板路径为绝对路径，兼容相对路径与打包运行目录。
-
-    解析顺序：
-    1) 若为绝对路径且存在，直接返回；
-    2) 基于应用基准目录 get_app_base_dir() 进行拼接；
-    3) 在应用基准目录下的 assets/images 中按文件名兜底；
-    4) 最后尝试基于当前工作目录；
-    5) 若均不存在，则原样返回（由上层进行存在性判断）。
-    """
+    """解析模板路径为绝对路径（文件路径分支）。SQLite模式不再使用 assets/images 兜底。"""
     try:
         if not p:
             return ""
@@ -144,12 +136,6 @@ def _resolve_template_path(p: str) -> str:
         candidate = os.path.join(base_dir, p)
         if os.path.exists(candidate):
             return candidate
-
-        # 在 assets/images 下按文件名兜底
-        img_dir = os.path.join(base_dir, "assets", "images")
-        candidate2 = os.path.join(img_dir, os.path.basename(p))
-        if os.path.exists(candidate2):
-            return candidate2
 
         # 工作目录兜底
         wd_path = os.path.abspath(os.path.join(os.getcwd(), p))
