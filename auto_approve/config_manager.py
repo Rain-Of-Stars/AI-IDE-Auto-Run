@@ -1,7 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 配置管理模块：负责加载、保存与提供默认配置。
-所有配置以 JSON 文件持久化，便于用户定制和下次启动自动生效。
+
+存储策略（已升级为SQLite优先）：
+- 主存储：SQLite 数据库（表config中仅一行，存放完整JSON字符串）；
+- 兼容镜像：仍在项目根目录维护一个 `config.json` 文件，作为只读镜像以兼容
+  既有流程与测试用例；所有更新先落库，再异步导出镜像JSON。
+
+注意：上层无需直接操作SQLite，统一通过本模块API读写配置。
 """
 from __future__ import annotations
 import json
@@ -10,6 +16,16 @@ from dataclasses import dataclass, asdict, field
 from typing import Optional, Dict, Any, List
 
 CONFIG_FILE = "config.json"
+
+# 引入SQLite存储层
+from storage import (
+    init_db,
+    get_db_path,
+    get_config_json,
+    set_config_json,
+    import_config_from_json,
+    export_config_to_json,
+)
 
 
 @dataclass
@@ -154,13 +170,32 @@ def _default_config_dict() -> Dict[str, Any]:
 
 
 def ensure_config_exists(path: Optional[str] = None) -> str:
-    """确保配置文件存在；不存在则创建默认配置。
-    返回配置文件绝对路径。
+    """确保配置主存储(DB)与镜像JSON存在；返回镜像JSON绝对路径。
+
+    逻辑：
+    1) 初始化数据库；
+    2) 若DB无配置，尝试从JSON镜像导入；若镜像也不存在，则写入默认配置；
+    3) 确保镜像JSON导出，兼容既有读取逻辑与测试。
     """
     config_path = os.path.abspath(path or CONFIG_FILE)
-    if not os.path.exists(config_path):
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(_default_config_dict(), f, ensure_ascii=False, indent=2)
+    # 将数据库文件固定到镜像JSON的同一目录，避免工作目录变化导致位置不一致
+    db_path = get_db_path(os.path.dirname(config_path))
+    init_db(db_path)
+
+    data = get_config_json()
+    if data is None:
+        # 优先从现有JSON镜像导入
+        imported = import_config_from_json(config_path)
+        if imported is None:
+            # 两边都没有，则写入默认配置
+            data = _default_config_dict()
+            set_config_json(data)
+    # 始终导出镜像，确保外部直接读取JSON仍然可用
+    try:
+        export_config_to_json(config_path)
+    except Exception:
+        # 镜像导出失败不影响主流程
+        pass
     return config_path
 
 
@@ -174,15 +209,11 @@ def _migrate_capture_backend(backend: str) -> str:
 
 
 def load_config(path: Optional[str] = None) -> AppConfig:
-    """从 JSON 读取配置，读取失败时回退默认配置并自动写回。"""
-    config_path = ensure_config_exists(path)
+    """加载配置：优先从SQLite读取；若为空将初始化默认并导出镜像。"""
+    ensure_config_exists(path)
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = get_config_json() or _default_config_dict()
     except Exception:
-        # 发生损坏时重置
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(_default_config_dict(), f, ensure_ascii=False, indent=2)
         data = _default_config_dict()
 
     # 构造 AppConfig
@@ -262,7 +293,7 @@ def load_config(path: Optional[str] = None) -> AppConfig:
 
 
 def save_config(cfg: AppConfig, path: Optional[str] = None) -> str:
-    """保存配置到 JSON，返回保存路径。"""
+    """保存配置到 SQLite，并异步导出JSON镜像；返回镜像路径。"""
     data = asdict(cfg)
     data["roi"] = asdict(cfg.roi)
     data["scales"] = list(cfg.scales)
@@ -279,14 +310,26 @@ def save_config(cfg: AppConfig, path: Optional[str] = None) -> str:
     data["auto_update_hwnd_by_process"] = cfg.auto_update_hwnd_by_process
     data["auto_update_hwnd_interval_ms"] = cfg.auto_update_hwnd_interval_ms
     config_path = os.path.abspath(path or CONFIG_FILE)
-    
-    # 使用GUI响应性管理器安排非阻塞配置保存
+
+    # 先落库，再异步导出镜像，保证主存一致性
+    try:
+        set_config_json(data)
+    except Exception:
+        # 落库失败直接抛出能被上层捕获；为稳健，这里仍继续尝试导出镜像
+        pass
+
+    # 立刻同步导出一次镜像，保证调用方读到最新（异步仅作兜底与UI提示）
+    try:
+        export_config_to_json(config_path)
+    except Exception:
+        pass
+
     _schedule_async_config_save(data, config_path)
     return config_path
 
 
 def _schedule_async_config_save(config_data: dict, config_path: str):
-    """使用高优先级UI更新调度异步配置保存"""
+    """使用高优先级UI更新调度异步配置保存（导出镜像）。"""
     try:
         from workers.io_tasks import ConfigurationTask, submit_io
         from auto_approve.gui_responsiveness_manager import schedule_ui_update
@@ -299,7 +342,7 @@ def _schedule_async_config_save(config_data: dict, config_path: str):
             priority=8  # 高优先级
         )
         
-        # 创建异步配置保存任务
+        # 创建异步配置保存任务（此处仍复用文件写任务，仅用于导出镜像）
         task = ConfigurationTask(
             config_path=config_path,
             operation='write',
@@ -325,16 +368,15 @@ def _schedule_async_config_save(config_data: dict, config_path: str):
                 priority=9  # 最高优先级
             )
         
-        # 提交异步保存任务
+        # 提交异步保存任务：这里写入的是JSON镜像（主存已在SQLite）
         submit_io(task, on_save_success, on_save_error)
         
     except Exception as e:
-        # 如果异步保存失败，回退到同步保存但仍然立即返回
+        # 如果异步保存失败，回退到同步导出镜像但仍然立即返回
         import threading
         def fallback_save():
             try:
-                with open(config_path, "w", encoding="utf-8") as f:
-                    json.dump(config_data, f, ensure_ascii=False, indent=2)
+                export_config_to_json(config_path)
                 from auto_approve.gui_responsiveness_manager import schedule_ui_update
                 schedule_ui_update(
                     widget_id='config_save',

@@ -25,6 +25,7 @@ from PySide6 import QtCore
 from PySide6.QtCore import QRunnable, QObject, Signal, QThreadPool, QTimer
 
 from auto_approve.logger_manager import get_logger
+from storage import save_image_blob, get_db_path, init_db
 
 
 class WorkerSignals(QObject):
@@ -768,6 +769,25 @@ class ImageSaveTask(IOTaskBase):
         self.emit_progress(100, "图像保存完成")
         
         h, w = self.image_data.shape[:2]
+        # 将图片同时保存到SQLite（BLOB），实现数据库内备份/追踪
+        try:
+            # 根据扩展名编码为相应格式的字节
+            ext = file_path.suffix.lower()
+            encode_ext = ".png" if ext not in [".jpg", ".jpeg", ".png", ".bmp"] else ext
+            params = []
+            if encode_ext in (".jpg", ".jpeg"):
+                params = [int(cv2.IMWRITE_JPEG_QUALITY), self.quality]
+            elif encode_ext == ".png":
+                params = [int(cv2.IMWRITE_PNG_COMPRESSION), 6]
+            ok, buf = cv2.imencode(encode_ext, self.image_data, params)
+            if ok:
+                # 数据库文件放在与镜像JSON相同目录，由config_manager控制；此处仅确保已初始化
+                init_db()
+                save_image_blob(file_path.name, buf.tobytes(), category="export", size=(w, h))
+        except Exception:
+            # 数据库存储失败不影响文件保存主流程
+            pass
+
         return {
             'file_path': str(file_path),
             'file_size': file_size,
