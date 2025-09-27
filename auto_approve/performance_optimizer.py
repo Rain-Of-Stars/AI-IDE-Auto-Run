@@ -46,7 +46,7 @@ class TemplateCache:
         self._cleanup_interval = 30.0  # 每30秒清理一次
     
     def get_template(self, template_path: str, grayscale: bool = True) -> Optional[Tuple[np.ndarray, Tuple[int, int]]]:
-        """获取预处理的模板，支持缓存"""
+        """获取预处理的模板，支持缓存；兼容 db://category/name 引用。"""
         cache_key = f"{template_path}_{grayscale}"
 
         # 定期清理缓存
@@ -59,10 +59,27 @@ class TemplateCache:
         
         # 加载并预处理模板
         try:
-            template = cv2.imread(template_path, cv2.IMREAD_COLOR)
-            if template is None:
-                self._logger.warning(f"无法加载模板: {template_path}")
-                return None
+            template = None
+            if isinstance(template_path, str) and template_path.startswith('db://'):
+                try:
+                    from storage import load_image_blob
+                    rest = template_path[5:]
+                    cat, name = rest.split('/', 1)
+                    blob = load_image_blob(name, category=cat)
+                    if not blob:
+                        self._logger.warning(f"数据库中未找到模板: {template_path}")
+                        return None
+                    import numpy as _np
+                    img_data = _np.frombuffer(blob, dtype=_np.uint8)
+                    template = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
+                except Exception as e:
+                    self._logger.error(f"加载数据库模板失败 {template_path}: {e}")
+                    return None
+            else:
+                template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+                if template is None:
+                    self._logger.warning(f"无法加载模板: {template_path}")
+                    return None
             
             if grayscale:
                 template = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)

@@ -173,8 +173,12 @@ def _load_templates_from_paths(template_paths: List[str]) -> List[Tuple[np.ndarr
         # 统一解析模板路径为绝对路径，避免相对路径在子进程中失效
         resolved_paths = []
         for p in template_paths:
-            rp = _resolve_template_path(p)
-            resolved_paths.append(rp)
+            if isinstance(p, str) and p.startswith('db://'):
+                # 数据库引用保持原样传递给模板管理器
+                resolved_paths.append(p)
+            else:
+                rp = _resolve_template_path(p)
+                resolved_paths.append(rp)
 
         # 获取模板管理器并加载模板（内存缓存）
         template_manager = get_template_manager()

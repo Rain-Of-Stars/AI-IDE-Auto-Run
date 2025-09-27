@@ -1420,72 +1420,52 @@ class SettingsDialog(QtWidgets.QDialog):
     # ---------- 交互逻辑 ----------
 
     def _on_add_templates(self):
-        """添加一个或多个模板图片到列表。
-        
-        改进：将选择的图片复制到 assets/images 目录，并使用相对路径添加到列表中。
-        """
+        """添加一个或多个模板图片到列表（存入SQLite，不再复制到assets/images）。"""
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
             self, "选择模板图片", os.getcwd(), "Images (*.png *.jpg *.jpeg *.bmp)"
         )
         if not paths:
             return
-        
-        # 确保 assets/images 目录存在
-        images_abs, images_rel = self._ensure_assets_images_dir()
-        
+
         # 避免重复添加
         existing = set(self._get_template_paths())
-        
+
+        from storage import init_db, save_image_blob, load_image_blob
+        init_db()
+
         for p in paths:
             if not p:
                 continue
-                
-            # 首先检查是否已经存在相同内容的文件
-            duplicate_filename = self._find_duplicate_file_by_content(p, images_abs)
-            if duplicate_filename:
-                # 文件内容已存在，使用现有文件的相对路径
-                rel_path = os.path.join(images_rel, duplicate_filename)
-                if rel_path not in existing:
-                    self.list_templates.addItem(rel_path)
-                    existing.add(rel_path)
-                    QtWidgets.QMessageBox.information(
-                        self, "文件已存在", 
-                        f"检测到相同内容的文件已存在：\n{duplicate_filename}\n\n已添加到模板列表，无需重复复制。"
-                    )
-                else:
-                    QtWidgets.QMessageBox.information(
-                        self, "文件已存在", 
-                        f"相同内容的文件已存在且已在模板列表中：\n{duplicate_filename}"
-                    )
-                continue
-                
-            # 生成目标文件名（保持原始文件名，如果重复则添加计数器）
+
             original_name = os.path.basename(p)
             name, ext = os.path.splitext(original_name)
             target_name = original_name
-            target_abs_path = os.path.join(images_abs, target_name)
-            
-            # 如果文件名已存在，添加计数器避免冲突
-            counter = 1
-            while os.path.exists(target_abs_path):
-                target_name = f"{name}_{counter}{ext}"
-                target_abs_path = os.path.join(images_abs, target_name)
-                counter += 1
-            
+
+            # 读取源文件字节
             try:
-                # 复制文件到 assets/images 目录
-                shutil.copy2(p, target_abs_path)
-                
-                # 使用相对路径添加到列表
-                rel_path = os.path.join(images_rel, target_name)
-                if rel_path not in existing:
-                    self.list_templates.addItem(rel_path)
-                    existing.add(rel_path)
-                    
+                with open(p, 'rb') as f:
+                    payload = f.read()
             except Exception as e:
-                QtWidgets.QMessageBox.warning(
-                    self, "复制失败", f"无法复制文件到 assets/images 目录：\n{str(e)}"
-                )
+                QtWidgets.QMessageBox.warning(self, "读取失败", f"无法读取文件：\n{p}\n{e}")
+                continue
+
+            # 若同名已存在且内容不同，则增加后缀
+            counter = 1
+            while True:
+                existed = load_image_blob(target_name, category="template")
+                if existed is None:
+                    break
+                if existed == payload:
+                    break
+                target_name = f"{name}_{counter}{ext}"
+                counter += 1
+
+            # 保存到DB（幂等覆盖相同内容）
+            save_image_blob(target_name, payload, category="template")
+            ref = f"db://template/{target_name}"
+            if ref not in existing:
+                self.list_templates.addItem(ref)
+                existing.add(ref)
 
     def _on_remove_selected(self):
         """删除选中的模板路径。"""
@@ -1554,32 +1534,26 @@ class SettingsDialog(QtWidgets.QDialog):
         return images_abs, images_rel
 
     def _resolve_template_path(self, p: str) -> str:
-        """解析模板条目的真实绝对路径。"""
+        """解析文件路径类型模板；db://请使用 _load_pixmap_for_ref 直接加载。"""
         p = (p or "").strip()
-        if not p:
+        if not p or p.startswith("db://"):
             return ""
         if os.path.isabs(p) and os.path.exists(p):
             return p
-        
-        # 获取项目根目录
+
         proj_root = get_app_base_dir()
-        
-        # 优先尝试项目根相对路径
         proj_path = os.path.join(proj_root, p)
         if os.path.exists(proj_path):
             return proj_path
-            
-        # 项目根下的 assets/images
+
         images_abs, _ = self._ensure_assets_images_dir()
         candidate = os.path.join(images_abs, os.path.basename(p))
         if os.path.exists(candidate):
             return candidate
-            
-        # 最后尝试工作目录相对路径（兼容性）
+
         wd_path = os.path.abspath(os.path.join(os.getcwd(), p))
         if os.path.exists(wd_path):
             return wd_path
-            
         return p
 
     def _on_preview_template(self):
@@ -1601,13 +1575,40 @@ class SettingsDialog(QtWidgets.QDialog):
         self._preview_path_from_item(item)
 
     def _preview_path_from_item(self, item: QtWidgets.QListWidgetItem):
-        """从列表项中解析路径并打开预览对话框。"""
-        path = self._resolve_template_path(item.text())
+        """基于列表项文本加载并预览模板（支持db://）。"""
+        ref = (item.text() or "").strip()
+        if ref.startswith("db://"):
+            pm = self._load_pixmap_for_ref(ref)
+            if pm is None or pm.isNull():
+                QtWidgets.QMessageBox.warning(self, "无法预览", f"数据库图片无法打开：\n{ref}")
+                return
+            ImagePreviewDialog(pm, ref, self).exec()
+            return
+        path = self._resolve_template_path(ref)
         pm = QtGui.QPixmap(path)
         if pm.isNull():
             QtWidgets.QMessageBox.warning(self, "无法预览", f"图片无法打开：\n{path}")
             return
         ImagePreviewDialog(pm, path, self).exec()
+
+    def _load_pixmap_for_ref(self, ref: str) -> Optional[QtGui.QPixmap]:
+        """从db://引用加载QPixmap。"""
+        try:
+            if not ref.startswith("db://"):
+                return None
+            rest = ref[5:]
+            cat, name = rest.split("/", 1)
+            from storage import load_image_blob
+            blob = load_image_blob(name, category=cat)
+            if not blob:
+                return None
+            ba = QtCore.QByteArray(bytes(blob))
+            pm = QtGui.QPixmap()
+            if pm.loadFromData(ba):
+                return pm
+            return None
+        except Exception:
+            return None
 
     @contextmanager
     def _temporarily_minimize_windows(self):
@@ -1664,7 +1665,7 @@ class SettingsDialog(QtWidgets.QDialog):
         改动说明：
         - 屏幕选择策略：优先使用鼠标所在屏幕，其次回退到“显示器索引”。
         - 截图完成后弹出“截图预览”对话框，提供“保存/取消”。
-        - 用户点击保存时，统一保存为PNG到项目的 assets/images，并加入模板列表。
+        - 用户点击保存时，编码为PNG写入数据库（category=template），并加入模板列表为db://引用。
         """
         with self._temporarily_minimize_windows():
             screens = QtGui.QGuiApplication.screens()
@@ -1692,19 +1693,32 @@ class SettingsDialog(QtWidgets.QDialog):
                 # 用户取消，不保存
                 return
 
-            # 4) 保存PNG到 assets/images 下，并加入列表
-            images_abs, images_rel = self._ensure_assets_images_dir()
-            fname = f"template_{QtCore.QDateTime.currentDateTime().toString('yyyyMMdd_HHmmss_zzz')}.png"
-            abs_path = os.path.join(images_abs, fname)
-            snip.selected_pixmap.save(abs_path, "PNG")
-            rel_path = os.path.join(images_rel, fname)
-            # 去重添加并选中新增项
+            # 4) 编码为PNG写入数据库，并加入列表
+            from storage import init_db, save_image_blob, load_image_blob
+            init_db()
+            # 通过QBuffer取PNG字节
+            byte_array = QtCore.QByteArray()
+            buffer = QtCore.QBuffer(byte_array)
+            buffer.open(QtCore.QIODevice.WriteOnly)
+            snip.selected_pixmap.save(buffer, "PNG")
+            payload = bytes(byte_array)
+            # 冲突处理：同名存在但内容不同则添加计数器
+            base = f"template_{QtCore.QDateTime.currentDateTime().toString('yyyyMMdd_HHmmss_zzz')}"
+            target_name = f"{base}.png"
+            counter = 1
+            while True:
+                existed = load_image_blob(target_name, category="template")
+                if existed is None or existed == payload:
+                    break
+                target_name = f"{base}_{counter}.png"
+                counter += 1
+            save_image_blob(target_name, payload, category="template")
+            ref = f"db://template/{target_name}"
             existing = {self.list_templates.item(i).text().strip() for i in range(self.list_templates.count())}
-            if rel_path not in existing:
-                self.list_templates.addItem(rel_path)
-            # 将焦点移动到新增项，便于用户确认
+            if ref not in existing:
+                self.list_templates.addItem(ref)
             for i in range(self.list_templates.count()-1, -1, -1):
-                if self.list_templates.item(i).text().strip() == rel_path:
+                if self.list_templates.item(i).text().strip() == ref:
                     self.list_templates.setCurrentRow(i)
                     break
             

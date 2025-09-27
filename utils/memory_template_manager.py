@@ -72,33 +72,63 @@ class MemoryTemplateManager:
         return loaded_count
     
     def _load_single_template(self, path: str, force_reload: bool = False) -> bool:
-        """加载单个模板"""
-        if not os.path.exists(path):
-            self._logger.warning(f"模板文件不存在: {path}")
-            return False
-        
-        # 计算文件哈希
-        file_hash = self._calculate_file_hash(path)
+        """加载单个模板；支持文件路径与db://category/name 引用。"""
+        is_db_ref = isinstance(path, str) and path.startswith("db://")
+
+        # 计算源数据与哈希
+        template = None
+        file_hash = ""
+        source_key = path  # 作为缓存键
+
+        if is_db_ref:
+            try:
+                from storage import load_image_blob
+                # 解析 db://category/name
+                rest = path[5:]
+                parts = rest.split("/", 1)
+                category = parts[0] if parts and parts[0] else "template"
+                name = parts[1] if len(parts) > 1 else ""
+                if not name:
+                    self._logger.warning(f"无效的数据库图片引用: {path}")
+                    return False
+                blob = load_image_blob(name, category=category)
+                if not blob:
+                    self._logger.warning(f"数据库中未找到图片: {path}")
+                    return False
+                import hashlib as _hashlib
+                file_hash = _hashlib.md5(blob).hexdigest()
+                img_data = np.frombuffer(blob, dtype=np.uint8)
+                template = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
+                if template is None:
+                    self._logger.error(f"无法解码数据库图片: {path}")
+                    return False
+            except Exception as e:
+                self._logger.error(f"加载数据库模板异常 {path}: {e}")
+                return False
+        else:
+            if not os.path.exists(path):
+                self._logger.warning(f"模板文件不存在: {path}")
+                return False
+            file_hash = self._calculate_file_hash(path)
         
         # 检查是否需要重新加载
-        if not force_reload and path in self._templates:
-            existing = self._templates[path]
+        if not force_reload and source_key in self._templates:
+            existing = self._templates[source_key]
             if existing.file_hash == file_hash:
                 # 更新访问时间
                 existing.last_access = time.time()
                 existing.access_count += 1
                 self._cache_hit_count += 1
                 return True
-        
-        # 加载图像数据
+
+        # 加载图像数据（若未从DB分支得到）
         try:
-            # 使用cv2.imdecode处理中文路径
-            img_data = np.fromfile(path, dtype=np.uint8)
-            template = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
-            
             if template is None:
-                self._logger.error(f"无法解码模板图像: {path}")
-                return False
+                img_data = np.fromfile(path, dtype=np.uint8)
+                template = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
+                if template is None:
+                    self._logger.error(f"无法解码模板图像: {path}")
+                    return False
             
             h, w = template.shape[:2]
             memory_size = template.nbytes
@@ -114,7 +144,7 @@ class MemoryTemplateManager:
             
             # 创建模板信息
             template_info = TemplateInfo(
-                path=path,
+                path=source_key,
                 data=template.copy(),  # 确保数据独立
                 size=(w, h),
                 file_hash=file_hash,
@@ -124,11 +154,11 @@ class MemoryTemplateManager:
             )
             
             # 更新缓存
-            if path in self._templates:
-                old_size = self._templates[path].data.nbytes
+            if source_key in self._templates:
+                old_size = self._templates[source_key].data.nbytes
                 self._total_memory_usage -= old_size
             
-            self._templates[path] = template_info
+            self._templates[source_key] = template_info
             self._total_memory_usage += memory_size
             self._cache_miss_count += 1
             
@@ -153,8 +183,9 @@ class MemoryTemplateManager:
         
         with self._lock:
             for path in template_paths:
-                if path in self._templates:
-                    template_info = self._templates[path]
+                key = path
+                if key in self._templates:
+                    template_info = self._templates[key]
                     # 更新访问统计
                     template_info.last_access = time.time()
                     template_info.access_count += 1
@@ -164,11 +195,11 @@ class MemoryTemplateManager:
                     templates.append((template_info.data.copy(), template_info.size))
                 else:
                     # 缓存未命中，尝试即时加载
-                    if self._load_single_template(path):
-                        template_info = self._templates[path]
+                    if self._load_single_template(key):
+                        template_info = self._templates[key]
                         templates.append((template_info.data.copy(), template_info.size))
                     else:
-                        self._logger.warning(f"无法获取模板: {path}")
+                        self._logger.warning(f"无法获取模板: {key}")
         
         return templates
     
