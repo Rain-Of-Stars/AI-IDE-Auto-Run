@@ -87,7 +87,7 @@ class UIStartupDiagnostic:
         """检查QSS样式加载"""
         print("🎨 检查QSS样式加载...")
         
-        qss_path = os.path.join(os.path.dirname(__file__), "..", "assets", "styles", "modern_flat.qss")
+        qss_path = os.path.join(os.path.dirname(__file__), "..", "assets", "styles", "minimal.qss")
         
         if os.path.exists(qss_path):
             try:

@@ -1155,8 +1155,6 @@ def apply_modern_theme(app: QtWidgets.QApplication):
             base_dir = get_app_base_dir()
             qss_paths = [
                 os.path.join(base_dir, "assets", "styles", "minimal.qss"),
-                os.path.join(base_dir, "assets", "styles", "modern_flat_lite.qss"),
-                os.path.join(base_dir, "assets", "styles", "modern_flat.qss"),
             ]
 
             for qss_path in qss_paths:
