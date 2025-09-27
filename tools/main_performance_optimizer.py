@@ -94,12 +94,11 @@ def apply_quick_optimization():
     print("\n🚀 正在应用快速性能优化...")
     
     try:
-        # 备份当前配置
+        # 备份当前配置（写入SQLite备份表）
+        from storage import add_config_backup, get_config_json
         current_config = load_config()
-        timestamp = int(time.time())
-        backup_path = f"config_backup_{timestamp}.json"
-        save_config(current_config, backup_path)
-        print(f"✅ 原配置已备份到: {backup_path}")
+        backup_id = add_config_backup(get_config_json() or {}, note="quick optimization backup")
+        print(f"✅ 原配置已备份到SQLite (backup_id={backup_id})")
         
         # 应用快速优化
         optimizer = ConfigOptimizer()

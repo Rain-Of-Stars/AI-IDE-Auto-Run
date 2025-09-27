@@ -298,19 +298,10 @@ class WGCPreviewDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, "提示", "没有可保存的帧")
             return
         
-        # 显示文件保存对话框
+        # 生成默认名称（不再写入磁盘，仅用于数据库键名）
         timestamp = int(time.time())
         default_filename = f"wgc_preview_capture_{timestamp}.png"
-        
-        filename, selected_filter = QtWidgets.QFileDialog.getSaveFileName(
-            self,
-            "保存捕获图像",
-            default_filename,
-            "PNG图像 (*.png);;JPEG图像 (*.jpg);;BMP图像 (*.bmp);;所有文件 (*.*)"
-        )
-        
-        if not filename:  # 用户取消了保存
-            return
+        filename = default_filename
         
         # 禁用保存按钮，防止重复点击
         self.save_btn.setEnabled(False)
@@ -318,10 +309,10 @@ class WGCPreviewDialog(QtWidgets.QDialog):
         QtWidgets.QApplication.processEvents()
         
         try:
-            # 使用非阻塞I/O线程池保存图像
+            # 使用非阻塞I/O线程池保存图像（仅数据库）
             from workers.io_tasks import submit_image_save
             
-            # 获取文件扩展名来确定质量设置
+            # 获取“扩展名”来确定质量设置（仅影响编码质量）
             file_extension = Path(filename).suffix.lower()
             quality = 95 if file_extension in ['.jpg', '.jpeg'] else 100
             
@@ -335,7 +326,7 @@ class WGCPreviewDialog(QtWidgets.QDialog):
                 # 在主线程中更新UI
                 QtCore.QTimer.singleShot(0, lambda: self._on_save_complete(False, error_message))
             
-            # 提交非阻塞保存任务
+            # 提交非阻塞保存任务（保存到SQLite的images表）
             self.save_task_id = submit_image_save(
                 self.current_frame,
                 filename,
@@ -345,8 +336,9 @@ class WGCPreviewDialog(QtWidgets.QDialog):
             )
             
         except Exception as e:
-            # 如果线程池提交失败，回退到传统的阻塞保存
-            self._fallback_blocking_save(filename, self.current_frame)
+            # 回退：直接提示失败（不再进行磁盘写入）
+            self.status_label.setText("保存失败")
+            QtWidgets.QMessageBox.critical(self, "错误", f"保存失败: {e}")
     
     def _on_save_complete(self, success, result):
         """保存完成后的UI更新"""
@@ -356,35 +348,21 @@ class WGCPreviewDialog(QtWidgets.QDialog):
             file_info = result
             file_size_mb = file_info['file_size'] / (1024 * 1024)
             dimensions = file_info['dimensions']
-            
-            self.status_label.setText(f"保存成功: {Path(file_info['file_path']).name}")
+            self.status_label.setText(f"保存成功: {Path(default_filename).name}")
             QtWidgets.QMessageBox.information(
-                self, 
-                "保存成功", 
-                f"图像已保存到:\n{file_info['file_path']}\n\n"
+                self,
+                "保存成功",
+                f"图像已保存到数据库:\n{file_info['file_path']}\n\n"
                 f"尺寸: {dimensions[0]}×{dimensions[1]}\n"
                 f"大小: {file_size_mb:.2f} MB\n"
-                f"质量: {file_info['quality']}"
+                f"质量: {file_info['quality']}\n"
+                f"image_id: {file_info.get('image_id')}"
             )
         else:
             self.status_label.setText("保存失败")
             QtWidgets.QMessageBox.critical(self, "保存失败", f"保存图像时出错:\n{result}")
     
-    def _fallback_blocking_save(self, filename, image_data):
-        """传统的阻塞保存（用于回退）"""
-        try:
-            success = cv2.imwrite(filename, image_data)
-            if success:
-                self.status_label.setText("保存成功")
-                QtWidgets.QMessageBox.information(self, "成功", f"图片已保存: {filename}")
-            else:
-                self.status_label.setText("保存失败")
-                QtWidgets.QMessageBox.warning(self, "失败", "保存图片失败")
-        except Exception as e:
-            self.status_label.setText("保存失败")
-            QtWidgets.QMessageBox.critical(self, "错误", f"保存失败: {e}")
-        finally:
-            self.save_btn.setEnabled(True)
+    # 取消磁盘回退保存逻辑
     
     def closeEvent(self, event):
         """关闭事件"""

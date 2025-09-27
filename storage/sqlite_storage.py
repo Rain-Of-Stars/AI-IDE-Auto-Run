@@ -99,6 +99,17 @@ def init_db(db_path: Optional[str] = None) -> None:
         );
         """
     )
+    # 配置备份表：用于保留历史配置快照
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS config_backups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data TEXT NOT NULL,
+            note TEXT,
+            created_at REAL NOT NULL
+        );
+        """
+    )
     cur.close()
 
 
@@ -152,6 +163,49 @@ def export_config_to_json(json_path: str) -> Optional[str]:
     with p.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return str(p)
+
+
+def add_config_backup(data: Dict[str, Any], note: str = "") -> int:
+    """将当前配置字典作为快照写入备份表，返回备份id。"""
+    conn = _get_conn()
+    cur = conn.cursor()
+    payload = json.dumps(data, ensure_ascii=False)
+    ts = time.time()
+    cur.execute(
+        "INSERT INTO config_backups (data, note, created_at) VALUES (?, ?, ?);",
+        (payload, note, ts),
+    )
+    rowid = cur.lastrowid or 0
+    cur.close()
+    return int(rowid)
+
+
+def list_config_backups(limit: int = 20) -> List[Tuple[int, float, str]]:
+    """列出最近的配置备份，返回(id, created_at, note)。"""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, created_at, COALESCE(note,'') FROM config_backups ORDER BY id DESC LIMIT ?;",
+        (limit,),
+    )
+    rows = cur.fetchall()
+    cur.close()
+    return [(int(r[0]), float(r[1]), str(r[2])) for r in rows]
+
+
+def get_config_backup(backup_id: int) -> Optional[Dict[str, Any]]:
+    """按id获取备份的配置字典。"""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT data FROM config_backups WHERE id=?;", (backup_id,))
+    row = cur.fetchone()
+    cur.close()
+    if not row:
+        return None
+    try:
+        return json.loads(row[0])
+    except Exception:
+        return None
 
 
 # ================= 图片BLOB存取 =================

@@ -719,81 +719,51 @@ def get_detailed_thread_pool_stats() -> Dict[str, Any]:
 
 
 class ImageSaveTask(IOTaskBase):
-    """图像保存任务 - 用于非阻塞保存图像文件"""
+    """图像保存任务 - 仅保存到SQLite（BLOB），不再写入磁盘文件"""
 
-    def __init__(self, image_data: np.ndarray, file_path: str, 
+    def __init__(self, image_data: np.ndarray, file_path: str,
                  quality: int = 95, task_id: str = None):
         super().__init__(task_id)
         self.image_data = image_data
+        # 兼容旧接口：仍接受file_path，但仅用于生成name
         self.file_path = file_path
         self.quality = quality
 
     def execute(self) -> Dict[str, Any]:
-        """执行图像保存操作"""
-        self.emit_progress(20, "准备保存图像")
-        
-        file_path = Path(self.file_path)
-        
-        # 确保目录存在
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        self.emit_progress(40, "正在写入文件")
-        
-        # 根据文件扩展名选择合适的保存参数
-        success = False
-        if file_path.suffix.lower() in ['.jpg', '.jpeg']:
-            # JPEG格式使用质量参数
-            success = cv2.imwrite(str(file_path), self.image_data, 
-                                [cv2.IMWRITE_JPEG_QUALITY, self.quality])
-        elif file_path.suffix.lower() == '.png':
-            # PNG格式使用压缩级别
-            success = cv2.imwrite(str(file_path), self.image_data,
-                                [cv2.IMWRITE_PNG_COMPRESSION, 6])  # 中等压缩
-        else:
-            # 其他格式直接保存
-            success = cv2.imwrite(str(file_path), self.image_data)
-        
-        if not success:
-            raise IOError(f"OpenCV无法保存图像到: {file_path}")
-        
-        self.emit_progress(80, "验证文件")
-        
-        # 验证文件是否成功创建
-        if not file_path.exists():
-            raise FileNotFoundError(f"保存后文件不存在: {file_path}")
-        
-        file_size = file_path.stat().st_size
-        if file_size == 0:
-            raise IOError(f"保存的文件大小为0: {file_path}")
-        
-        self.emit_progress(100, "图像保存完成")
-        
-        h, w = self.image_data.shape[:2]
-        # 将图片同时保存到SQLite（BLOB），实现数据库内备份/追踪
-        try:
-            # 根据扩展名编码为相应格式的字节
-            ext = file_path.suffix.lower()
-            encode_ext = ".png" if ext not in [".jpg", ".jpeg", ".png", ".bmp"] else ext
-            params = []
-            if encode_ext in (".jpg", ".jpeg"):
-                params = [int(cv2.IMWRITE_JPEG_QUALITY), self.quality]
-            elif encode_ext == ".png":
-                params = [int(cv2.IMWRITE_PNG_COMPRESSION), 6]
-            ok, buf = cv2.imencode(encode_ext, self.image_data, params)
-            if ok:
-                # 数据库文件放在与镜像JSON相同目录，由config_manager控制；此处仅确保已初始化
-                init_db()
-                save_image_blob(file_path.name, buf.tobytes(), category="export", size=(w, h))
-        except Exception:
-            # 数据库存储失败不影响文件保存主流程
-            pass
+        """执行图像保存到数据库的操作"""
+        self.emit_progress(20, "准备编码图像")
 
+        file_path = Path(self.file_path)
+        name = file_path.name or f"image_{int(time.time())}.png"
+        ext = file_path.suffix.lower() or ".png"
+
+        # 编码为指定格式字节
+        params = []
+        if ext in (".jpg", ".jpeg"):
+            params = [int(cv2.IMWRITE_JPEG_QUALITY), self.quality]
+        elif ext == ".png":
+            params = [int(cv2.IMWRITE_PNG_COMPRESSION), 6]
+
+        ok, buf = cv2.imencode(ext if ext in (".jpg", ".jpeg", ".png", ".bmp") else ".png", self.image_data, params)
+        if not ok:
+            raise IOError("图像编码失败")
+
+        self.emit_progress(60, "写入数据库")
+        h, w = self.image_data.shape[:2]
+        init_db()  # 确保数据库已初始化
+        rowid = save_image_blob(name, buf.tobytes(), category="export", size=(w, h))
+
+        self.emit_progress(100, "保存完成(数据库)")
+
+        # 返回兼容字段，其中file_path使用db://前缀表示保存在数据库
         return {
-            'file_path': str(file_path),
-            'file_size': file_size,
+            'file_path': f'db://export/{name}',
+            'file_size': len(buf),
             'dimensions': (w, h),
             'quality': self.quality,
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'image_id': rowid,
+            'category': 'export'
         }
 
 

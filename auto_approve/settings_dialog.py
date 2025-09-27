@@ -2268,12 +2268,15 @@ class SettingsDialog(QtWidgets.QDialog):
             dlg.setWindowTitle(title)
             if dlg.exec() == QtWidgets.QDialog.Accepted:
                 import time
-                path = f"capture_test_{int(time.time())}.png"
-                success = cv2.imwrite(path, img)
-                if success:
-                    QtWidgets.QMessageBox.information(self, "保存成功", f"图片已保存: {path}")
+                from storage import init_db, save_image_blob
+                name = f"capture_test_{int(time.time())}.png"
+                ok, buf = cv2.imencode('.png', img, [int(cv2.IMWRITE_PNG_COMPRESSION), 6])
+                if ok:
+                    init_db()
+                    save_image_blob(name, buf.tobytes(), category="export", size=(w, h))
+                    QtWidgets.QMessageBox.information(self, "保存成功", f"图片已保存到数据库: db://export/{name}")
                 else:
-                    QtWidgets.QMessageBox.warning(self, "保存失败", "无法保存图片文件")
+                    QtWidgets.QMessageBox.warning(self, "保存失败", "无法编码图片数据")
 
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "显示错误", f"图像显示失败: {e}")
@@ -2315,12 +2318,15 @@ class SettingsDialog(QtWidgets.QDialog):
             try:
                 if dlg.exec() == QtWidgets.QDialog.Accepted:
                     import time
-                    path = f"capture_test_{int(time.time())}.png"
-                    success = cv2.imwrite(path, img)
-                    if success:
-                        QtWidgets.QMessageBox.information(self, "保存成功", f"图片已保存: {path}")
+                    from storage import init_db, save_image_blob
+                    name = f"capture_test_{int(time.time())}.png"
+                    ok, buf = cv2.imencode('.png', img, [int(cv2.IMWRITE_PNG_COMPRESSION), 6])
+                    if ok:
+                        init_db()
+                        save_image_blob(name, buf.tobytes(), category="export", size=(w, h))
+                        QtWidgets.QMessageBox.information(self, "保存成功", f"图片已保存到数据库: db://export/{name}")
                     else:
-                        QtWidgets.QMessageBox.warning(self, "保存失败", "无法保存图片文件")
+                        QtWidgets.QMessageBox.warning(self, "保存失败", "无法编码图片数据")
             finally:
                 # 确保在用户完成所有操作后释放资源
                 capture_manager.release_shared_frame(user_id)

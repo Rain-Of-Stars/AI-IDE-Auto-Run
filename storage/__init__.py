@@ -14,11 +14,13 @@ from .sqlite_storage import (
     get_config_json,
     set_config_json,
     import_config_from_json,
-    export_config_to_json,
     save_image_blob,
     load_image_blob,
     list_images,
     delete_image,
+    add_config_backup,
+    list_config_backups,
+    get_config_backup,
 )
 
 __all__ = [
@@ -27,10 +29,11 @@ __all__ = [
     "get_config_json",
     "set_config_json",
     "import_config_from_json",
-    "export_config_to_json",
     "save_image_blob",
     "load_image_blob",
     "list_images",
     "delete_image",
+    "add_config_backup",
+    "list_config_backups",
+    "get_config_backup",
 ]
-

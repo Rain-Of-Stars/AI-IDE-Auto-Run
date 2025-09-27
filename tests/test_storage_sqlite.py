@@ -29,14 +29,14 @@ class TestSQLiteStorage(unittest.TestCase):
         if str(project_root) not in sys.path:
             sys.path.insert(0, str(project_root))
 
-    def test_sqlite_config_and_mirror(self):
+    def test_sqlite_config_only(self):
         from auto_approve.config_manager import load_config, save_config, CONFIG_FILE
         from storage import get_db_path
 
         cfg = load_config(CONFIG_FILE)
         self.assertIsNotNone(cfg)
 
-        # 主动保存一次，确保DB落盘（不同平台上首次连接可能懒创建）
+        # 主动保存一次，确保DB落盘
         save_config(cfg, CONFIG_FILE)
 
         db_path = Path(get_db_path())
@@ -50,16 +50,12 @@ class TestSQLiteStorage(unittest.TestCase):
                 pass
         self.assertTrue(db_path.exists(), "数据库文件应已创建")
 
-        json_path = Path(CONFIG_FILE)
-        self.assertTrue(json_path.exists(), "应导出JSON镜像以兼容旧流程")
-
+        # 保存后从DB读取应一致
         old_interval = cfg.interval_ms
         cfg.interval_ms = old_interval + 123
         save_config(cfg, CONFIG_FILE)
-
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        self.assertEqual(data.get('interval_ms'), old_interval + 123)
+        cfg2 = load_config(CONFIG_FILE)
+        self.assertEqual(cfg2.interval_ms, old_interval + 123)
 
     def test_image_blob_roundtrip(self):
         from storage import init_db, save_image_blob, load_image_blob, list_images, delete_image

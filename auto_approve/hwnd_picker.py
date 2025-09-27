@@ -407,9 +407,15 @@ class HWNDPickerDialog(QtWidgets.QDialog):
                     dlg = ScreenshotPreviewDialog(pm, self, is_wgc_test=True)
                     dlg.setWindowTitle("WGC捕获测试结果")
                     if dlg.exec() == QtWidgets.QDialog.Accepted:
-                        path = f"wgc_test_capture_{int(time.time())}.png"
-                        cv2.imwrite(path, img)
-                        QtWidgets.QMessageBox.information(self, "已保存", f"图片保存到: {path}")
+                        from storage import init_db, save_image_blob
+                        name = f"wgc_test_capture_{int(time.time())}.png"
+                        ok, buf = cv2.imencode('.png', img, [int(cv2.IMWRITE_PNG_COMPRESSION), 6])
+                        if ok:
+                            init_db()
+                            save_image_blob(name, buf.tobytes(), category="export", size=(w, h))
+                            QtWidgets.QMessageBox.information(self, "已保存", f"图片保存到数据库: db://export/{name}")
+                        else:
+                            QtWidgets.QMessageBox.warning(self, "保存失败", "无法编码图片数据")
                 finally:
                     thread.quit()
 

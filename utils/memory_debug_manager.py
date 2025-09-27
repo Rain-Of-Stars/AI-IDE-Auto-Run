@@ -138,40 +138,39 @@ class MemoryDebugManager:
     
     def export_to_disk(self, output_dir: str, category: Optional[str] = None) -> int:
         """
-        将内存中的调试图像导出到磁盘
-        
+        将内存中的调试图像保存到SQLite（不再写磁盘）。
+
         Args:
-            output_dir: 输出目录
+            output_dir: 兼容旧参数，已忽略
             category: 指定类别，None表示导出所有
-            
+
         Returns:
-            导出的图像数量
+            导入数据库的图像数量
         """
-        import os
-        
         try:
-            os.makedirs(output_dir, exist_ok=True)
+            from storage import init_db, save_image_blob
+            init_db()
             exported_count = 0
-            
+
             with self._lock:
                 for image_id, debug_info in self._images.items():
                     if category is None or debug_info.category == category:
                         try:
-                            # 生成文件名
                             timestamp_str = time.strftime("%Y%m%d_%H%M%S", time.localtime(debug_info.timestamp))
-                            filename = f"{timestamp_str}_{debug_info.category}_{debug_info.name}.png"
-                            filepath = os.path.join(output_dir, filename)
-                            
-                            # 保存图像
-                            cv2.imwrite(filepath, debug_info.data)
-                            exported_count += 1
-                            
+                            name = f"{timestamp_str}_{debug_info.category}_{debug_info.name}.png"
+                            ok, buf = cv2.imencode('.png', debug_info.data, [int(cv2.IMWRITE_PNG_COMPRESSION), 6])
+                            if ok:
+                                h, w = debug_info.data.shape[:2]
+                                save_image_blob(name, buf.tobytes(), category="debug", size=(w, h))
+                                exported_count += 1
+                            else:
+                                self._logger.error(f"编码调试图像失败 {image_id}")
                         except Exception as e:
                             self._logger.error(f"导出调试图像失败 {image_id}: {e}")
-            
-            self._logger.info(f"调试图像导出完成: {exported_count}个图像导出到 {output_dir}")
+
+            self._logger.info(f"调试图像导出完成: {exported_count}个图像写入数据库")
             return exported_count
-            
+
         except Exception as e:
             self._logger.error(f"导出调试图像异常: {e}")
             return 0
