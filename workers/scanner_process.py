@@ -715,9 +715,21 @@ class ScannerProcessManager(QObject):
 
     def start_scanning(self, cfg: AppConfig) -> bool:
         """启动扫描进程 - 使用线程化启动避免阻塞GUI"""
+        # 修复：当 stop 后短时间内再次 start 时，可能出现 _running=True 但进程已不在/已被清理，
+        # 导致上层始终停留在“正在创建扫描进程…”。这里改为更稳健的判断：
+        # 1) 若实际仍在运行（进程活着），直接返回；
+        # 2) 若仅有残留标志（_running=True 但进程对象为空或已退出），执行一次强制清理后继续启动。
         if self._running:
-            self._logger.warning("扫描进程已在运行")
-            return True
+            if self._process is not None and self._process.is_alive():
+                self._logger.warning("扫描进程已在运行")
+                return True
+            else:
+                self._logger.warning("检测到残留运行状态但进程未存活，执行强制清理并重新启动")
+                # 确保彻底清理残留资源，避免新的启动卡住
+                try:
+                    self._cleanup_process()
+                except Exception as e:
+                    self._logger.debug(f"残留清理异常: {e}")
 
         try:
             self._logger.info("开始创建扫描进程...")
